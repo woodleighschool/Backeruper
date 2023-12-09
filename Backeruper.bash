@@ -20,6 +20,100 @@ else
 fi
 userHomes=$(echo "${userHomesRaw}" | tr ',' '\n' | sort -f | uniq | sed -e 's/^/\"/' -e 's/$/\",/' -e '$ s/.$//')
 
+# Define an array of subdirectories to exclude, relative to /Users/${selectedUser}
+excludePatterns=(
+	"Library/Audio"
+	"Library/Autosave Information"
+	"Library/CallServices"
+	"Library/CloudStorage"
+	"Library/Cookies"
+	"Library/Favorites"
+	"Library/GameKit"
+	"Library/GroupContainersAlias"
+	"Library/Log"
+	"Library/Maps"
+	"Library/NGL"
+	"Library/News"
+	"Library/PhotoshopCrashes"
+	"Library/Printers"
+	"Library/SafariSafeBrowsing"
+	"Library/ScreenRecordings"
+	"Library/Staging"
+	"Library/SyncedPreferences"
+	"Library/Contacts"
+	"Library/ContainerManager"
+	"Library/DataAccess"
+	"Library/LaunchAgents"
+	"Library/LockdownMode"
+	"Library/Reminders"
+	"Library/SafariSandboxBroker"
+	"Library/com.amplitude.plist"
+	"Library/DataDeliveryServices"
+	"Library/MobileDevice"
+	"Library/ResponseKit"
+	"Library/studentd"
+	"Library/Google"
+	"Library/Translation"
+	"Library/com.apple.bluetoothuser"
+	"Library/CoreFollowUp"
+	"Library/Sharing"
+	"Library/com.amplitude.database"
+	"Library/Application Scripts"
+	"Library/com.apple.bluetooth.services.cloud"
+	"Library/org.swift.swiftpm"
+	"Library/Keyboard"
+	"Library/UnifiedAssetFramework"
+	"Library/DoNotDisturb"
+	"Library/Intents"
+	"Library/DES"
+	"Library/KeyboardServices"
+	"Library/com.apple.internal.ck"
+	"Library/LanguageModeling"
+	"Library/com.apple.AppleMediaServices"
+	"Library/com.apple.icloud.searchpartyd"
+	"Library/com.apple.iTunesCloud"
+	"Library/Accessibility"
+	"Library/com.apple.groupkitd"
+	"Library/Saved Application State"
+	"Library/Accounts"
+	"Library/FrontBoard"
+	"Library/Passes"
+	"Library/Shortcuts"
+	"Library/com.apple.aiml.instrumentation"
+	"Library/Assistant"
+	"Library/AppleMediaServices"
+	"Library/IdentityServices"
+	"Library/com.apple.appleaccountd"
+	"Library/WebKit"
+	"Library/Calendars"
+	"Library/Finance"
+	"Library/Trial"
+	"Library/PersonalizationPortrait"
+	"Library/Weather"
+	"Library/Suggestions"
+	"Library/StatusKit"
+	"Library/Safari"
+	"Library/DuetExpertCenter"
+	"Library/HomeKit"
+	"Library/Daemon Containers"
+	"Library/IntelligencePlatform"
+	"Library/Logs"
+	"Library/Keychains"
+	"Library/Preferences"
+	"Library/HTTPStorages"
+	"Library/Mobile Documents"
+	"Library/Biome"
+	"Library/Metadata"
+	"Library/Mail"
+	"Library/Developer"
+	"Library/Photos"
+	"Library/Caches"
+	"Library/Containers"
+	"Library/Group Containers"
+	"Library/iTunes"
+	"Library/Python"
+)
+
 ##
 # Functions
 ##
@@ -61,6 +155,34 @@ bytesToHuman() {
 		((s++))
 	done
 	echo "$b$d ${S[$s]}"
+}
+
+convert_to_bytes() {
+	local totalSize=0
+	local unit
+	local number
+
+	for size in "$@"; do
+		# Extract the number and the unit (if any)
+		number=$(echo $size | sed -E 's/([0-9.]+)([KMGTP]?)B?/\1/')
+		unit=$(echo $size | sed -E 's/([0-9.]+)([KMGTP]?)B?/\2/')
+
+		# Convert the size to bytes based on the unit
+		case $unit in
+		K) number=$(echo "$number * 1000" | bc | awk '{print int($1+0.5)}') ;;
+		M) number=$(echo "$number * 1000^2" | bc | awk '{print int($1+0.5)}') ;;
+		G) number=$(echo "$number * 1000^3" | bc | awk '{print int($1+0.5)}') ;;
+		T) number=$(echo "$number * 1000^4" | bc | awk '{print int($1+0.5)}') ;;
+		P) number=$(echo "$number * 1000^5" | bc | awk '{print int($1+0.5)}') ;;
+		*) number=$(echo "$number" | bc | awk '{print int($1+0.5)}') ;; # No unit means bytes
+		esac
+
+		# Add to the total
+		totalSize=$(echo "$totalSize + $number" | bc)
+	done
+
+	# Convert total to an integer to avoid decimals
+	echo $(echo "$totalSize" | awk '{print int($1+0.5)}')
 }
 
 # ================================
@@ -140,10 +262,22 @@ function get_mount_point() {
 	# Check if the command was successful
 	if [ "$?" -eq 0 ] && [ -n "${mount}" ]; then
 		echo "Mount point found: ${mount}"
-		destination="${mount}"
+		destination="${mount}/Backeruper"
 	else
 		echo "No mount point found for disk: ${1}"
 		destination=""
+	fi
+}
+
+toBackupFolder() {
+	# Extract the line containing the folder name
+	local line=$(echo "${results}" | grep "\"${folder}")
+
+	# Check if the line contains "true"
+	if [[ ${line} =~ "true" ]]; then
+		return 0
+	else
+		return 1
 	fi
 }
 
@@ -217,7 +351,7 @@ function source_destination_dialog() {
 	0) # User pressed 'Next'
 		echo "User pressed 'Next'. Processing selections."
 		# Display a processing dialog
-		dialog --icon "sf=gearshape.fill,animation=pulse" --mini --title "Backeruper" --message "Gathering Intelligence" --progress &
+		dialog --icon "sf=gearshape.fill,animation=pulse" --mini --title "Backeruper" --message "Gathering Intelligence" --progress --commandfile "${commandFile}" &
 		sleep 0.3
 		until pgrep -q -x "Dialog"; do
 			sleep 0.5
@@ -240,17 +374,24 @@ function source_destination_dialog() {
 # ================================
 
 function folder_select_dialog() {
-
 	# Initialise Folder Selection Dialog
 	# -----------------------------------
-	# Define an array of folder names for selection
-	folders=("Desktop" "Documents" "Downloads" "Pictures" "Movies" "Music" "OneDrive")
+	# Create an empty array
+	folders=()
+
+	# Use a loop to read folder names line by line and handle spaces
+	while IFS= read -r folder; do
+		# Skip the selectedUser folder
+		if [[ "$folder" != "${selectedUser}" ]]; then
+			folders+=("$folder")
+		fi
+	done < <(find "/Users/${selectedUser}" -type d -maxdepth 1 -exec basename {} \; | sort)
 
 	# Start building the dialog JSON
 	dialogJSON='{
   "commandfile": "'"${commandFile}"'",
   "title": "Backeruper",
-  "message": "Please select the data you would like to backup.",
+  "message": "Please select the folders you would like to backup.",
   "icon": "sf=externaldrive.fill.badge.questionmark",
   "button1text": "Backup",
   "button2text": "Cancel",
@@ -259,26 +400,47 @@ function folder_select_dialog() {
 
 	# Loop through folders to add them to the dialog
 	echo "Adding folders to selection dialog."
-	infoboxContent+="**Source Info:**  \n"
 	for folder in "${folders[@]}"; do
-		# Check if the folder exists and get its size
+		# Check if the folder exists
 		if [ -d "/Users/${selectedUser}/${folder}" ]; then
 			disabled="false"
-			folderSize=$(du -sh "/Users/${selectedUser}/${folder}" | cut -f1)
-			infoboxContent+="**${folder}:** ${folderSize}B  \n"
+			dialogUpdate "progresstext: Indexing: /Users/${selectedUser}/${folder}"
+
+			# Initialize the array for du command
+			duCommand=(du -ch)
+			for exc in "${excludePatterns[@]}"; do
+				# Extract the top-level folder name from the exclusion pattern
+				topLevelFolder=$(echo "${exc}" | cut -d'/' -f1)
+
+				# Check if the current folder matches the top-level folder in the exclusion pattern
+				if [[ "${folder}" == "${topLevelFolder}" ]]; then
+					# Extract the bottom-level folder name and append to du command array
+					bottomLevelFolder=$(basename "${exc}")
+					duCommand+=(-I "${bottomLevelFolder}")
+				fi
+			done
+
+			# Calculate the total size with the specified exclusions
+			folderSize=$("${duCommand[@]}" "/Users/${selectedUser}/${folder}" | tail -n1 | cut -f1)
+			folderSizesArray+=("$folderSize")
+
 		else
 			disabled="true"
 		fi
 
 		# Add checkbox entry for the folder
 		dialogJSON+='{
-      "label": "'"${folder}"'",
+      "label": "'"${folder}"' ('"${folderSize// /}"')",
       "checked": "false",
       "disabled": "'"${disabled}"'"
     },'
 	done
 
 	# Finalise the dialog JSON
+	totalSizeInBytes=$(convert_to_bytes "${folderSizesArray[@]}")
+	totalSize=$(bytesToHuman ${totalSizeInBytes})
+	infoboxContent+="**Source Info:**  \n**Total Size:** ${totalSize}"
+
 	# Remove the last comma from checkbox entries and complete the JSON structure
 	dialogJSON=$(echo "${dialogJSON}" | sed '$ s/,$//')
 	dialogJSON+='],
@@ -357,8 +519,9 @@ fi
 
 # Disk Speed Test
 # ----------------
-echo "Performing disk speed test on the selected drive."
+echo "Performing disk speed test at ${destination}/testfile."
 # Perform a speed test on the drive
+mkdir -p "${destination}"
 diskSpeed=$(dd if=/dev/zero of="${destination}"/testfile bs=1M count=128 oflag=direct 2>&1 | grep -o '[0-9]\+ bytes/sec' | awk '{print $1}')
 # Clean up the test file
 rm -f "${destination}"/testfile
@@ -428,7 +591,7 @@ echo "Generating list of folders for processing."
 folderListCsv=""
 index=0
 for folder in "${folders[@]}"; do
-	if [[ $(get_json_value "${results}" "${folder}") == "true" ]]; then
+	if toBackupFolder; then
 		folderListCsv+="${folder},"
 		dialogUpdate "listitem: index: ${index}, status: pending, statustext: Pending"
 		((index++))
@@ -465,20 +628,66 @@ esac
 # ----------------------
 echo "Starting folder processing."
 dialogUpdate "progress: 1"
+
+# Create a temporary file for rsync output
+rsyncLogFile=$(mktemp -u /var/tmp/rsyncLog.XXX)
+touch "${rsyncLogFile}"
+
 for folder in "${folders[@]}"; do
-	if [[ $(get_json_value "${results}" "${folder}") == "true" ]]; then
-		dialogUpdate "listitem: index: ${index}, status: wait, statustext: Processing"
-		sleep 1
-		# Run rsync for each folder
-		rsync "${rsyncArgs}" --delete --out-format="%n" "/Users/${selectedUser}/${folder}/" "${destination}/${selectedUser}/${folder}" 2>&1 |
-			while IFS= read -r file; do
-				if [[ -n "$file" ]]; then
-					dialogUpdate "progresstext: ${file}"
+	if toBackupFolder; then
+		echo "/Users/${selectedUser}/${folder} => ${destination}/${selectedUser}/${folder}"
+		dialogUpdate "listitem: index: ${index}, status: progress, statustext: Processing"
+
+		# Initialize an array for rsync exclude options
+		rsyncExcludeOpts=()
+		for exc in "${excludePatterns[@]}"; do
+			if [[ "${exc}" == "${folder}"/* ]]; then
+				subfolder="${exc#${folder}/}"
+				rsyncExcludeOpts+=(--exclude="${subfolder}")
+			fi
+		done
+
+		# Run rsync in the background, redirecting output to the temp file
+		rsync ${rsyncArgs} --no-i-r --delete --info=progress2 --out-format="%f" "${rsyncExcludeOpts[@]}" "/Users/${selectedUser}/${folder}/" "${destination}/${selectedUser}/${folder}" >"${rsyncLogFile}" 2>&1 &
+		rsync_pid=$!
+
+		file_name=""
+		progress=""
+		update_needed=false
+		last_update=0
+		# Read the latest lines of the log file
+		while kill -0 ${rsync_pid} 2>/dev/null; do
+			while IFS= read -r line; do
+				# Break the loop if rsync is no longer running
+				kill -0 ${rsync_pid} &>/dev/null || break
+
+				# Check if line contains progress info
+				if [[ "${line}" =~ ^[[:space:]]+[0-9]+ ]]; then
+					progress=$(echo "${line}" | awk '{print $3}' | tr -d '%')
+					update_needed=true
+				else
+					file_name="${line}"
+					update_needed=true
 				fi
-			done
+
+				# Throttle the updates to once per second
+				current_time=$(date +%s)
+				if [[ "$update_needed" == true ]] && ((current_time > last_update)); then
+					if [[ -n "${file_name}" && -n "${progress}" ]]; then
+						dialogUpdate "progresstext: ${file_name}"
+						dialogUpdate "listitem: index: ${index}, progress: ${progress}"
+						update_needed=false
+						last_update=$(date +%s)
+					fi
+				fi
+			done < <(tail -n 2 "${rsyncLogFile}")
+		done
+
+		# Wait for rsync to finish
+		wait ${rsync_pid}
 
 		# Capture the rsync exit status
-		rsync_status=${PIPESTATUS[0]}
+		rsync_status=$?
 
 		# Update Dialog based on rsync result
 		if [ "${rsync_status}" -eq 0 ]; then
@@ -493,6 +702,9 @@ for folder in "${folders[@]}"; do
 		dialogUpdate "progress: increment ${progressIncrementValue}"
 	fi
 done
+
+# Remove the temporary file
+echo "rm -f ${rsyncLogFile}"
 
 # Final Dialog Update
 # -------------------
