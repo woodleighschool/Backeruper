@@ -1,118 +1,46 @@
 #!/bin/bash
 
+# ================================
+# Defaults
+# ================================
+JSONFile=$(mktemp -u /var/tmp/dialogJSONFile.XXX)
+commandFile=$(mktemp -u /var/tmp/dialogCommandFile.XXX)
+scriptVersion="1.0.1"
+# this is here so we can use the brew rsync, if available
+PATH="/opt/homebrew/bin:${PATH}"
+
+# ================================
+# Compatibility checks (dialog installed, rsync compatible)
+# ================================
 if [ ! -f /usr/local/bin/dialog ]; then
 	exit 1 # Dialog is not installed
 fi
 
-##
-# Defaults
-##
-JSONFile=$(mktemp -u /var/tmp/dialogJSONFile.XXX)
-commandFile=$(mktemp -u /var/tmp/dialogCommandFile.XXX)
-scriptVersion="1.0.1"
+# native macos rsync does not have some flags we need
+current_version=$(rsync --version | awk '/version/{print $3}')
+min_rsync="3.2.7"
+if [ "$(printf '%s\n' "${min_rsync}" "${current_version}" | sort -V | head -n1)" != "${min_rsync}" ]; then
+	exit 1 # install complatible rsync here?
+fi
 
+# ================================
+# Autopopulate fields
+# ================================
+# logged in user for home selection default
 loggedInUser=$(stat -f%Su /dev/console)
-# dont display other users if we are not woodmin|tokenadmin
+
+# Don't display other users if we are not woodmin|tokenadmin
 if [[ "${loggedInUser}" =~ ^(woodmin|tokenadmin)$ ]]; then
+	# find all user homes in /Users, return as comma seperated
 	userHomesRaw=$(ls -d /Users/*/ | grep -vE '(Shared|tokenadmin)' | xargs -n 1 basename | paste -sd "," -)
 else
+	# return the logged in user if we are not allowed to backup other users' home
 	userHomesRaw="${loggedInUser}"
 fi
 userHomes=$(echo "${userHomesRaw}" | tr ',' '\n' | sort -f | uniq | sed -e 's/^/\"/' -e 's/$/\",/' -e '$ s/.$//')
 
 # Define an array of subdirectories to exclude, relative to /Users/${selectedUser}
-excludePatterns=(
-	"Library/Audio"
-	"Library/Autosave Information"
-	"Library/CallServices"
-	"Library/CloudStorage"
-	"Library/Cookies"
-	"Library/Favorites"
-	"Library/GameKit"
-	"Library/GroupContainersAlias"
-	"Library/Log"
-	"Library/Maps"
-	"Library/NGL"
-	"Library/News"
-	"Library/PhotoshopCrashes"
-	"Library/Printers"
-	"Library/SafariSafeBrowsing"
-	"Library/ScreenRecordings"
-	"Library/Staging"
-	"Library/SyncedPreferences"
-	"Library/Contacts"
-	"Library/ContainerManager"
-	"Library/DataAccess"
-	"Library/LaunchAgents"
-	"Library/LockdownMode"
-	"Library/Reminders"
-	"Library/SafariSandboxBroker"
-	"Library/com.amplitude.plist"
-	"Library/DataDeliveryServices"
-	"Library/MobileDevice"
-	"Library/ResponseKit"
-	"Library/studentd"
-	"Library/Google"
-	"Library/Translation"
-	"Library/com.apple.bluetoothuser"
-	"Library/CoreFollowUp"
-	"Library/Sharing"
-	"Library/com.amplitude.database"
-	"Library/Application Scripts"
-	"Library/com.apple.bluetooth.services.cloud"
-	"Library/org.swift.swiftpm"
-	"Library/Keyboard"
-	"Library/UnifiedAssetFramework"
-	"Library/DoNotDisturb"
-	"Library/Intents"
-	"Library/DES"
-	"Library/KeyboardServices"
-	"Library/com.apple.internal.ck"
-	"Library/LanguageModeling"
-	"Library/com.apple.AppleMediaServices"
-	"Library/com.apple.icloud.searchpartyd"
-	"Library/com.apple.iTunesCloud"
-	"Library/Accessibility"
-	"Library/com.apple.groupkitd"
-	"Library/Saved Application State"
-	"Library/Accounts"
-	"Library/FrontBoard"
-	"Library/Passes"
-	"Library/Shortcuts"
-	"Library/com.apple.aiml.instrumentation"
-	"Library/Assistant"
-	"Library/AppleMediaServices"
-	"Library/IdentityServices"
-	"Library/com.apple.appleaccountd"
-	"Library/WebKit"
-	"Library/Calendars"
-	"Library/Finance"
-	"Library/Trial"
-	"Library/PersonalizationPortrait"
-	"Library/Weather"
-	"Library/Suggestions"
-	"Library/StatusKit"
-	"Library/Safari"
-	"Library/DuetExpertCenter"
-	"Library/HomeKit"
-	"Library/Daemon Containers"
-	"Library/IntelligencePlatform"
-	"Library/Logs"
-	"Library/Keychains"
-	"Library/Preferences"
-	"Library/HTTPStorages"
-	"Library/Mobile Documents"
-	"Library/Biome"
-	"Library/Metadata"
-	"Library/Mail"
-	"Library/Developer"
-	"Library/Photos"
-	"Library/Caches"
-	"Library/Containers"
-	"Library/Group Containers"
-	"Library/iTunes"
-	"Library/Python"
-)
+excludePatterns=("Library/Audio" "Library/Autosave Information" "Library/CallServices" "Library/CloudStorage" "Library/Cookies" "Library/Favorites" "Library/GameKit" "Library/GroupContainersAlias" "Library/Log" "Library/Maps" "Library/NGL" "Library/News" "Library/PhotoshopCrashes" "Library/Printers" "Library/SafariSafeBrowsing" "Library/ScreenRecordings" "Library/Staging" "Library/SyncedPreferences" "Library/Contacts" "Library/ContainerManager" "Library/DataAccess" "Library/LaunchAgents" "Library/LockdownMode" "Library/Reminders" "Library/SafariSandboxBroker" "Library/com.amplitude.plist" "Library/DataDeliveryServices" "Library/MobileDevice" "Library/ResponseKit" "Library/studentd" "Library/Google" "Library/Translation" "Library/com.apple.bluetoothuser" "Library/CoreFollowUp" "Library/Sharing" "Library/com.amplitude.database" "Library/Application Scripts" "Library/com.apple.bluetooth.services.cloud" "Library/org.swift.swiftpm" "Library/Keyboard" "Library/UnifiedAssetFramework" "Library/DoNotDisturb" "Library/Intents" "Library/DES" "Library/KeyboardServices" "Library/com.apple.internal.ck" "Library/LanguageModeling" "Library/com.apple.AppleMediaServices" "Library/com.apple.icloud.searchpartyd" "Library/com.apple.iTunesCloud" "Library/Accessibility" "Library/com.apple.groupkitd" "Library/Saved Application State" "Library/Accounts" "Library/FrontBoard" "Library/Passes" "Library/Shortcuts" "Library/com.apple.aiml.instrumentation" "Library/Assistant" "Library/AppleMediaServices" "Library/IdentityServices" "Library/com.apple.appleaccountd" "Library/WebKit" "Library/Calendars" "Library/Finance" "Library/Trial" "Library/PersonalizationPortrait" "Library/Weather" "Library/Suggestions" "Library/StatusKit" "Library/Safari" "Library/DuetExpertCenter" "Library/HomeKit" "Library/Daemon Containers" "Library/IntelligencePlatform" "Library/Logs" "Library/Keychains" "Library/Preferences" "Library/HTTPStorages" "Library/Mobile Documents" "Library/Biome" "Library/Metadata" "Library/Mail" "Library/Developer" "Library/Photos" "Library/Caches" "Library/Containers" "Library/Group Containers" "Library/iTunes" "Library/Python")
 
 ##
 # Functions
@@ -185,13 +113,17 @@ convert_to_bytes() {
 	echo $(echo "$totalSize" | awk '{print int($1+0.5)}')
 }
 
+function updateScriptLog() {
+	echo -e "$(date +%Y-%m-%d\ %H:%M:%S) - ${1}" # | tee -a "${scriptLog}"
+}
+
 # ================================
 # Title: List External Disks
-# Description: This function lists all external disks that match specific partition types on macOS.
+# Description: This function lists all external disks that match macos supported partitions.
 # ================================
 
 function listDisks() {
-	echo "Listing external disks"
+	updateScriptLog "Listing external disks"
 
 	# Define a list of acceptable partition types
 	declare -a acceptablePartitionTypes=("Apple_HFS" "APFS" "Microsoft Basic Data")
@@ -240,31 +172,28 @@ function listDisks() {
 
 	# Output the formatted list of external disks
 	if [ ${#formattedVolumes[@]} -eq 0 ]; then
-		echo "No external disks found."
+		updateScriptLog "No external disks found."
 	else
-		echo "External disks found. Preparing list."
+		updateScriptLog "External disks found. Preparing list."
 		printf -v volumeList "%s," "${formattedVolumes[@]}"
-		echo "${volumeList%,}"
+		updateScriptLog "${volumeList%,}"
 	fi
 }
 
 # ================================
-# Title: Get Disk Mount Point
-# Description: This function retrieves the mount point of a specified disk using diskutil on macOS.
+# Retrieves the mount point of a disk using diskutil
 # ================================
-
 function get_mount_point() {
-	# Retrieve mount point information using diskutil
 	# $1 is expected to be the disk identifier
-	echo "Retrieving mount point for disk: $1"
+	updateScriptLog "Retrieving mount point for disk: $1"
 	mount=$(diskutil info "${1}" | grep 'Mount Point:' | cut -d ':' -f2 | xargs)
 
 	# Check if the command was successful
 	if [ "$?" -eq 0 ] && [ -n "${mount}" ]; then
-		echo "Mount point found: ${mount}"
+		updateScriptLog "Mount point found: ${mount}"
 		destination="${mount}/Backeruper"
 	else
-		echo "No mount point found for disk: ${1}"
+		updateScriptLog "No mount point found for disk: ${1}"
 		destination=""
 	fi
 }
@@ -274,7 +203,7 @@ toBackupFolder() {
 	local line=$(echo "${results}" | grep "\"${folder}")
 
 	# Check if the line contains "true"
-	if [[ ${line} =~ "true" ]]; then
+	if [[ "${line}" =~ "true" ]]; then
 		return 0
 	else
 		return 1
@@ -288,11 +217,11 @@ toBackupFolder() {
 
 function source_destination_dialog() {
 	# List available disks
-	echo "Listing available disks for backup destination."
+	updateScriptLog "Listing available disks for backup destination."
 	listDisks
 
 	# Prepare JSON for the dialog
-	echo "Preparing source and destination selection dialog."
+	updateScriptLog "Preparing source and destination selection dialog."
 	if [ -z "${volumeList}" ]; then
 		destinationDefault="No External Drives Attached"
 		volumeList='"No External Drives Attached"'
@@ -336,7 +265,7 @@ function source_destination_dialog() {
 	# Display the Dialog
 	refresh_files
 	echo "${dialogJSON}" >"${JSONFile}"
-	echo "Displaying source and destination selection dialog."
+	updateScriptLog "Displaying source and destination selection dialog."
 	results=$(eval dialog --jsonfile "${JSONFile}" --json "$([ "${button1disabled}" = "true" ] && echo " --button1disabled") ") # display dialog
 
 	# Evaluate User Input
@@ -349,7 +278,7 @@ function source_destination_dialog() {
 	# Handle User Selections
 	case "${returnCode}" in
 	0) # User pressed 'Next'
-		echo "User pressed 'Next'. Processing selections."
+		updateScriptLog "User pressed 'Next'. Processing selections."
 		# Display a processing dialog
 		dialog --icon "sf=gearshape.fill,animation=pulse" --mini --title "Backeruper" --message "Gathering Intelligence" --progress --commandfile "${commandFile}" &
 		sleep 0.3
@@ -362,7 +291,7 @@ function source_destination_dialog() {
 		selectedDestination=$(get_json_value "${results}" "Destination" "selectedValue")
 		;;
 	*) # User pressed 'Cancel' or closed the dialog
-		echo "User cancelled the selection."
+		updateScriptLog "User cancelled the selection."
 		clean_quit 0
 		;;
 	esac
@@ -375,17 +304,16 @@ function source_destination_dialog() {
 
 function folder_select_dialog() {
 	# Initialise Folder Selection Dialog
-	# -----------------------------------
-	# Create an empty array
+
 	folders=()
 
-	# Use a loop to read folder names line by line and handle spaces
+	# Use a loop to read folder names line by line
 	while IFS= read -r folder; do
-		# Skip the selectedUser folder
-		if [[ "$folder" != "${selectedUser}" ]]; then
+		# Skip the selectedUser folder and .Trash
+		if [[ ! "$folder" =~ (${selectedUser}|\.Trash) ]]; then
 			folders+=("$folder")
 		fi
-	done < <(find "/Users/${selectedUser}" -type d -maxdepth 1 -exec basename {} \; | sort)
+	done < <(find "/Users/${selectedUser}" -type d -maxdepth 1 -exec basename {} \; | sort -d)
 
 	# Start building the dialog JSON
 	dialogJSON='{
@@ -399,46 +327,62 @@ function folder_select_dialog() {
   "checkbox": ['
 
 	# Loop through folders to add them to the dialog
-	echo "Adding folders to selection dialog."
+	updateScriptLog "Adding folders to selection dialog."
+
 	for folder in "${folders[@]}"; do
-		# Check if the folder exists
-		if [ -d "/Users/${selectedUser}/${folder}" ]; then
-			disabled="false"
-			dialogUpdate "progresstext: Indexing: /Users/${selectedUser}/${folder}"
+		dialogUpdate "progresstext: Indexing: /Users/${selectedUser}/${folder}"
 
-			# Initialize the array for du command
-			duCommand=(du -ch)
-			for exc in "${excludePatterns[@]}"; do
-				# Extract the top-level folder name from the exclusion pattern
-				topLevelFolder=$(echo "${exc}" | cut -d'/' -f1)
+		# Initialize the array for du command
+		duCommand=(du -ch)
+		for exc in "${excludePatterns[@]}"; do
+			# Extract the top-level folder name from the exclusion pattern
+			topLevelFolder=$(echo "${exc}" | cut -d'/' -f1)
+			# Check if the current folder matches the top-level folder in the exclusion pattern
+			if [[ "${folder}" == "${topLevelFolder}" ]]; then
+				# Extract the bottom-level folder name and append to du command array
+				bottomLevelFolder=$(basename "${exc}")
+				duCommand+=(-I "${bottomLevelFolder}")
+			fi
+		done
 
-				# Check if the current folder matches the top-level folder in the exclusion pattern
-				if [[ "${folder}" == "${topLevelFolder}" ]]; then
-					# Extract the bottom-level folder name and append to du command array
-					bottomLevelFolder=$(basename "${exc}")
-					duCommand+=(-I "${bottomLevelFolder}")
-				fi
-			done
-
-			# Calculate the total size with the specified exclusions
-			folderSize=$("${duCommand[@]}" "/Users/${selectedUser}/${folder}" | tail -n1 | cut -f1)
-			folderSizesArray+=("$folderSize")
-
-		else
-			disabled="true"
-		fi
+		# Calculate the total size with the specified exclusions
+		folderSize=$("${duCommand[@]}" "/Users/${selectedUser}/${folder}" | tail -n1 | cut -f1)
+		# keep a total for later
+		folderSizesArray+=("${folderSize}")
+		# some folders should be pre-checked
+		case "${folder}" in
+		Desktop)
+			checked="true"
+			;;
+		Documents)
+			checked="true"
+			;;
+		Downloads)
+			checked="true"
+			;;
+		Pictures)
+			checked="true"
+			;;
+		*[wW]oodleigh*) # for onedrive
+			checked="true"
+			;;
+		*)
+			checked="false"
+			;;
+		esac
 
 		# Add checkbox entry for the folder
 		dialogJSON+='{
       "label": "'"${folder}"' ('"${folderSize// /}"')",
-      "checked": "false",
-      "disabled": "'"${disabled}"'"
+      "checked": "'"${checked}"'",
+      "disabled": "false"
     },'
 	done
-
+	set -x
 	# Finalise the dialog JSON
 	totalSizeInBytes=$(convert_to_bytes "${folderSizesArray[@]}")
-	totalSize=$(bytesToHuman ${totalSizeInBytes})
+	totalSize=$(bytesToHuman "${totalSizeInBytes}")
+	set +x
 	infoboxContent+="**Source Info:**  \n**Total Size:** ${totalSize}"
 
 	# Remove the last comma from checkbox entries and complete the JSON structure
@@ -465,7 +409,7 @@ function folder_select_dialog() {
 	echo "${dialogJSON}" >"${JSONFile}"
 
 	# Display the dialog and capture the results
-	echo "Displaying folder selection dialog."
+	updateScriptLog "Displaying folder selection dialog."
 	results=$(eval dialog --jsonfile "${JSONFile}" --json) # display dialog
 
 	# Evaluate User Input
@@ -478,10 +422,10 @@ function folder_select_dialog() {
 
 	case "${returnCode}" in
 	0) # User selected 'Backup'
-		echo "User selected 'Backup'."
+		updateScriptLog "User selected 'Backup'."
 		;;
 	*) # User selected 'Cancel' or closed the dialog
-		echo "User selected 'Cancel' or closed the dialog."
+		updateScriptLog "User selected 'Cancel' or closed the dialog."
 		clean_quit 0
 		;;
 	esac
@@ -492,7 +436,7 @@ function folder_select_dialog() {
 # ================================
 # Invoke Dialog for Source and Destination Selection
 # ---------------------------------------------------
-echo "Invoking source and destination selection dialog."
+updateScriptLog "Invoking source and destination selection dialog."
 source_destination_dialog
 
 # Validate Selected User and Destination
@@ -502,13 +446,13 @@ destination=$(echo "${selectedDestination}" | awk -F'[()]' '{print $(NF-1)}')
 
 # Check if selected user is empty
 if [ -z "${selectedUser}" ]; then
-	echo "No user selected. Exiting."
+	updateScriptLog "No user selected. Exiting."
 	clean_quit 1
 fi
 
 # Check if selected destination is empty
 if [ -z "${selectedDestination}" ]; then
-	echo "No destination selected. Exiting."
+	updateScriptLog "No destination selected. Exiting."
 	clean_quit 1
 else
 	# Get partition name
@@ -519,7 +463,8 @@ fi
 
 # Disk Speed Test
 # ----------------
-echo "Performing disk speed test at ${destination}/testfile."
+updateScriptLog "Performing disk speed test at ${destination}/testfile."
+dialogUpdate "progresstext: Preforming a speed test on ${destination}"
 # Perform a speed test on the drive
 mkdir -p "${destination}"
 diskSpeed=$(dd if=/dev/zero of="${destination}"/testfile bs=1M count=128 oflag=direct 2>&1 | grep -o '[0-9]\+ bytes/sec' | awk '{print $1}')
@@ -527,11 +472,12 @@ diskSpeed=$(dd if=/dev/zero of="${destination}"/testfile bs=1M count=128 oflag=d
 rm -f "${destination}"/testfile
 # Convert the speed to a human-readable format
 diskSpeed="$(bytesToHuman "${diskSpeed}")"
-
+dialogUpdate "progresstext: Disk speed is: ${diskSpeed}/s"
+sleep 3
 # Add disk speed info to the infobox content
 infoboxContent="**Destination Info:**  \n**Speed:** ${diskSpeed}/s  \n**Type**: ${parttype}\n\n"
 
-echo "Disk speed test completed: ${diskSpeed}/s."
+updateScriptLog "Disk speed test completed: ${diskSpeed}/s."
 
 folder_select_dialog
 
@@ -572,11 +518,11 @@ sleep 0.3
 until pgrep -q -x "Dialog"; do
 	sleep 0.5
 done
-echo "Progress dialog initialised."
+updateScriptLog "Progress dialog initialised."
 
 # Create Destination Directory
 # -----------------------------
-echo "Creating destination directory for user ${selectedUser}."
+updateScriptLog "Creating destination directory for user ${selectedUser}."
 mkdir -p "${destination}/${selectedUser}"
 
 # Initialise Rsync Failure Flag
@@ -587,7 +533,7 @@ rsync_failed=0
 # Prepare List of Folders
 # ------------------------
 # Generate a CSV list of folders to be processed
-echo "Generating list of folders for processing."
+updateScriptLog "Generating list of folders for processing."
 folderListCsv=""
 index=0
 for folder in "${folders[@]}"; do
@@ -611,22 +557,22 @@ index=0 # Reset index for processing loop
 case "${parttype}" in
 
 APFS)
-	echo "Drive supports extended attributes, using -avtE"
+	updateScriptLog "Drive supports extended attributes, using -avtE"
 	rsyncArgs="-avtE"
 	;;
 Mac\ OS\ Extended\ \(Journaled\))
-	echo "Drive supports extended attributes, using -avtE"
+	updateScriptLog "Drive supports extended attributes, using -avtE"
 	rsyncArgs="-avtE"
 	;;
 *)
-	echo "Drive does not support extended attributes! using -avt"
+	updateScriptLog "Drive does not support extended attributes! using -avt"
 	rsyncArgs="-avt"
 	;;
 esac
 
 # Processing Each Folder
 # ----------------------
-echo "Starting folder processing."
+updateScriptLog "Starting folder processing."
 dialogUpdate "progress: 1"
 
 # Create a temporary file for rsync output
@@ -635,7 +581,7 @@ touch "${rsyncLogFile}"
 
 for folder in "${folders[@]}"; do
 	if toBackupFolder; then
-		echo "/Users/${selectedUser}/${folder} => ${destination}/${selectedUser}/${folder}"
+		updateScriptLog "/Users/${selectedUser}/${folder} => ${destination}/${selectedUser}/${folder}"
 		dialogUpdate "listitem: index: ${index}, status: progress, statustext: Processing"
 
 		# Initialize an array for rsync exclude options
@@ -647,6 +593,8 @@ for folder in "${folders[@]}"; do
 			fi
 		done
 
+		[[ -n "${rsyncExcludeOpts}" ]] && updateScriptLog "${folder}: rsync excludes are: '${rsyncExcludeOpts[*]//--exclude=/./}'"
+
 		# Run rsync in the background, redirecting output to the temp file
 		rsync ${rsyncArgs} --no-i-r --delete --info=progress2 --out-format="%f" "${rsyncExcludeOpts[@]}" "/Users/${selectedUser}/${folder}/" "${destination}/${selectedUser}/${folder}" >"${rsyncLogFile}" 2>&1 &
 		rsync_pid=$!
@@ -657,6 +605,7 @@ for folder in "${folders[@]}"; do
 		last_update=0
 		# Read the latest lines of the log file
 		while kill -0 ${rsync_pid} 2>/dev/null; do
+			# this, indeed, does use quite the chunk of cpu %
 			while IFS= read -r line; do
 				# Break the loop if rsync is no longer running
 				kill -0 ${rsync_pid} &>/dev/null || break
@@ -690,11 +639,11 @@ for folder in "${folders[@]}"; do
 		rsync_status=$?
 
 		# Update Dialog based on rsync result
-		if [ "${rsync_status}" -eq 0 ]; then
+		if [ "${rsync_status}" -eq "0" ]; then
 			dialogUpdate "listitem: index: ${index}, status: success, statustext: Done!"
 		else
 			dialogUpdate "listitem: index: ${index}, status: fail, statustext: Failed!"
-			rsync_failed=1
+			rsync_failed="1"
 		fi
 
 		# Increment index and update progress
@@ -704,16 +653,17 @@ for folder in "${folders[@]}"; do
 done
 
 # Remove the temporary file
-echo "rm -f ${rsyncLogFile}"
+rm -f "${rsyncLogFile}"
 
 # Final Dialog Update
 # -------------------
-echo "Finalising the process."
-if [ ${rsync_failed} -eq 0 ]; then
+updateScriptLog "Finalising the process."
+if [ "${rsync_failed}" -eq "0" ]; then
 	dialogUpdate "progresstext: Completed Successfully!"
 	dialogUpdate "icon: sf=externaldrive.fill.badge.checkmark"
 	dialogUpdate "progress: complete"
 else
+	dialogUpdate "progresstext: Some folders failed to backup"
 	dialogUpdate "icon: sf=externaldrive.fill.badge.xmark"
 	dialogUpdate "progress: reset"
 fi
@@ -724,5 +674,5 @@ dialogUpdate "button1: enable"
 sleep 1
 
 # Exit Script
-echo "Script execution completed."
+updateScriptLog "Script execution completed."
 clean_quit 0
