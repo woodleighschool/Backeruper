@@ -6,8 +6,6 @@
 JSONFile=$(mktemp -u /var/tmp/dialogJSONFile.XXX)
 commandFile=$(mktemp -u /var/tmp/dialogCommandFile.XXX)
 scriptVersion="1.0.1"
-# this is here so we can use the brew rsync, if available
-PATH="/opt/homebrew/bin:${PATH}"
 
 # ================================
 # Compatibility checks (dialog installed, rsync compatible)
@@ -17,10 +15,10 @@ if [ ! -f /usr/local/bin/dialog ]; then
 fi
 
 # native macos rsync does not have some flags we need
-current_version=$(rsync --version | awk '/version/{print $3}')
-min_rsync="3.2.7"
-if [ "$(printf '%s\n' "${min_rsync}" "${current_version}" | sort -V | head -n1)" != "${min_rsync}" ]; then
-	exit 1 # install complatible rsync here?
+if [ ! -f "/usr/local/bin/rsync" ]; then
+	curl -L https://r2-d2.woodleigh.vic.edu.au/Packages/rsync-3.3.0.pkg -o /var/tmp/rsync-3.3.0.pkg
+	installer -pkg /var/tmp/rsync-3.3.0.pkg -target /
+	rm /var/tmp/rsync-3.3.0.pkg
 fi
 
 # ================================
@@ -123,6 +121,7 @@ function updateScriptLog() {
 # ================================
 
 function listDisks() {
+	set -x
 	updateScriptLog "Listing external disks"
 
 	# Define a list of acceptable partition types
@@ -178,6 +177,7 @@ function listDisks() {
 		printf -v volumeList "%s," "${formattedVolumes[@]}"
 		updateScriptLog "${volumeList%,}"
 	fi
+	set +x
 }
 
 # ================================
@@ -596,7 +596,7 @@ for folder in "${folders[@]}"; do
 		[[ -n "${rsyncExcludeOpts}" ]] && updateScriptLog "${folder}: rsync excludes are: '${rsyncExcludeOpts[*]//--exclude=/./}'"
 
 		# Run rsync in the background, redirecting output to the temp file
-		rsync ${rsyncArgs} --no-i-r --delete --info=progress2 --out-format="%f" "${rsyncExcludeOpts[@]}" "/Users/${selectedUser}/${folder}/" "${destination}/${selectedUser}/${folder}" >"${rsyncLogFile}" 2>&1 &
+		/usr/local/bin/rsync ${rsyncArgs} --no-i-r --delete --info=progress2 --out-format="%f" "${rsyncExcludeOpts[@]}" "/Users/${selectedUser}/${folder}/" "${destination}/${selectedUser}/${folder}" >"${rsyncLogFile}" 2>&1 &
 		rsync_pid=$!
 
 		file_name=""
